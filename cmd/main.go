@@ -114,7 +114,8 @@ func httpRulePatternToMethod(httpRule *annotations.HttpRule) (method string, pat
 }
 
 func main() {
-	configData, err := os.ReadFile("conf/config.toml")
+	var configPath = os.Getenv("CONFIG_PATH")
+	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		panic(errors.Wrap(err, "read config file"))
 	}

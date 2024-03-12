@@ -9,7 +9,7 @@ build/
 generate.*.bat
 /go/
 /ts/
-/conf/config.toml
+/conf/*.toml
 
 ### STS ###
 .apt_generated
