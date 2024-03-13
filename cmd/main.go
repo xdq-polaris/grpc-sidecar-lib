@@ -7,8 +7,10 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/samber/lo"
 	"github.com/xdq-polaris/grpc-sidecar/config"
 	"google.golang.org/genproto/googleapis/api/annotations"
+	"google.golang.org/grpc/metadata"
 	"net/http"
 	"os"
 	"strings"
@@ -21,7 +23,9 @@ import (
 	"google.golang.org/grpc"
 )
 
-func doResolveService(engine gin.IRouter, serviceName string, svcDesc *desc.ServiceDescriptor, serviceClientConn *grpc.ClientConn) {
+func doResolveService(engine gin.IRouter,
+	serviceName string, svcDesc *desc.ServiceDescriptor, serviceClientConn *grpc.ClientConn,
+	allowedRequestHeaders []string) {
 	var methods = svcDesc.GetMethods()
 	for _, method := range methods {
 		var methodName = method.GetName()
@@ -45,23 +49,40 @@ func doResolveService(engine gin.IRouter, serviceName string, svcDesc *desc.Serv
 		}
 		httpMethod, httpPath := httpRulePatternToMethod(httpRule)
 		fmt.Println(fmt.Sprintf("%s->%s", serviceName, methodName), httpMethod, httpPath)
-		engine.Handle(httpMethod, httpPath, newServiceHandler(serviceClientConn, method))
+		engine.Handle(httpMethod, httpPath,
+			newServiceHandler(serviceClientConn, method, allowedRequestHeaders))
 	}
 }
 
-func newServiceHandler(serviceClientConn *grpc.ClientConn, method *desc.MethodDescriptor) gin.HandlerFunc {
+func newServiceHandler(serviceClientConn *grpc.ClientConn, method *desc.MethodDescriptor,
+	allowedRequestHeaders []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		r, w := c.Request, c.Writer
+		requestMD := metadata.New(map[string]string{})
+		for key, values := range r.Header {
+			if !lo.Contains(allowedRequestHeaders, strings.ToLower(key)) {
+				continue
+			}
+			for _, value := range values {
+				requestMD.Append(key, value)
+			}
+		}
+		var ctx = context.Background()
+		ctx = metadata.NewOutgoingContext(ctx, requestMD)
+
 		// 解析HTTP请求体到动态消息
 		dynamicMsg := dynamic.NewMessage(method.GetInputType())
-		if err := json.NewDecoder(r.Body).Decode(dynamicMsg); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to decode request body: %v", err), http.StatusBadRequest)
-			return
+		var fields = method.GetInputType().GetFields()
+		if len(fields) > 0 {
+			if err := json.NewDecoder(r.Body).Decode(dynamicMsg); err != nil {
+				http.Error(w, fmt.Sprintf("Failed to decode request body: %v", err), http.StatusBadRequest)
+				return
+			}
 		}
 
 		// 使用grpcdynamic包执行gRPC请求
 		stub := grpcdynamic.NewStub(serviceClientConn)
-		response, err := stub.InvokeRpc(context.Background(), method, dynamicMsg)
+		response, err := stub.InvokeRpc(ctx, method, dynamicMsg)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("gRPC call failed: %v", err), http.StatusInternalServerError)
 			return
@@ -137,6 +158,12 @@ func main() {
 	if err != nil {
 		panic(errors.Wrap(err, "list services"))
 	}
+	var allowedRequestHeaders = []string{
+		"x-user-code",
+		"x-bind-id",
+		"x-org-code",
+		"x-role-code",
+	}
 	for _, serviceName := range serviceNames {
 		fmt.Println(serviceName)
 		if strings.HasPrefix(serviceName, "grpc.reflection") {
@@ -150,7 +177,9 @@ func main() {
 			//http.Error(w, fmt.Sprintf("Failed to resolve service: %v", err), http.StatusInternalServerError)
 			return
 		}
-		doResolveService(engine, serviceName, svcDesc, conn)
+		doResolveService(engine,
+			serviceName, svcDesc, conn,
+			allowedRequestHeaders)
 	}
 
 	// 启动HTTP服务器
