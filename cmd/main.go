@@ -8,7 +8,7 @@ import (
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/samber/lo"
-	"github.com/xdq-polaris/grpc-sidecar/config"
+	"github.com/xdq-polaris/grpc-sidecar-lib/config"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/grpc/metadata"
 	"net/http"

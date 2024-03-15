@@ -1,4 +1,4 @@
-module github.com/xdq-polaris/grpc-sidecar
+module github.com/xdq-polaris/grpc-sidecar-lib
 
 go 1.21
 
