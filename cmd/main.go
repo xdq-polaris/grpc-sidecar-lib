@@ -134,16 +134,7 @@ func httpRulePatternToMethod(httpRule *annotations.HttpRule) (method string, pat
 	}
 }
 
-func main() {
-	var configPath = os.Getenv("CONFIG_PATH")
-	configData, err := os.ReadFile(configPath)
-	if err != nil {
-		panic(errors.Wrap(err, "read config file"))
-	}
-	var sidecarConfig = &config.SidecarConfig{}
-	if err := toml.Unmarshal(configData, sidecarConfig); err != nil {
-		panic(errors.Wrap(err, "unmarshal config"))
-	}
+func NewHttpEngineFromConfig(sidecarConfig *config.SidecarConfig) *gin.Engine {
 	// 连接到gRPC服务
 	conn, err := grpc.Dial(sidecarConfig.BackendAddress, grpc.WithInsecure())
 	if err != nil {
@@ -158,12 +149,7 @@ func main() {
 	if err != nil {
 		panic(errors.Wrap(err, "list services"))
 	}
-	var allowedRequestHeaders = []string{
-		"x-user-code",
-		"x-bind-id",
-		"x-org-code",
-		"x-role-code",
-	}
+	var allowedRequestHeaders = sidecarConfig.AllowRequestHeaders
 	for _, serviceName := range serviceNames {
 		fmt.Println(serviceName)
 		if strings.HasPrefix(serviceName, "grpc.reflection") {
@@ -174,14 +160,25 @@ func main() {
 		svcDesc, err := refClient.ResolveService(serviceName)
 		if err != nil {
 			panic(errors.Wrapf(err, "resolve service:%s", serviceName))
-			//http.Error(w, fmt.Sprintf("Failed to resolve service: %v", err), http.StatusInternalServerError)
-			return
 		}
 		doResolveService(engine,
 			serviceName, svcDesc, conn,
 			allowedRequestHeaders)
 	}
+	return engine
+}
 
+func main() {
+	var configPath = os.Getenv("CONFIG_PATH")
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		panic(errors.Wrap(err, "read config file"))
+	}
+	var sidecarConfig = &config.SidecarConfig{}
+	if err := toml.Unmarshal(configData, sidecarConfig); err != nil {
+		panic(errors.Wrap(err, "unmarshal config"))
+	}
+	var engine = NewHttpEngineFromConfig(sidecarConfig)
 	// 启动HTTP服务器
 	if err := engine.Run(fmt.Sprintf(":%d", sidecarConfig.Port)); err != nil {
 		panic(err)
