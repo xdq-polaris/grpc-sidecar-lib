@@ -12,16 +12,25 @@ import (
 	"github.com/xdq-polaris/grpc-sidecar-lib/pkg/http_rule"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"strings"
+	"time"
 )
 
 func ApplyHttpEngineFromConfig(engine gin.IRouter, sidecarConfig *config.SidecarConfig) {
+	var kacp = keepalive.ClientParameters{
+		Time:                10 * time.Second, // send pings every 10 seconds if there is no activity
+		Timeout:             time.Second,      // wait 1 second for ping back
+		PermitWithoutStream: true,             // send pings even without active streams
+	}
 	// 连接到gRPC服务
-	conn, err := grpc.Dial(sidecarConfig.BackendAddress, grpc.WithInsecure())
+	conn, err := grpc.Dial(sidecarConfig.BackendAddress,
+		grpc.WithInsecure(),
+		grpc.WithKeepaliveParams(kacp),
+		grpc.WithBlock())
 	if err != nil {
 		panic(errors.Wrap(err, "dial grpc"))
 	}
-	defer conn.Close()
 
 	// 使用gRPC reflection创建一个reflection client
 	refClient := grpcreflect.NewClientAuto(context.Background(), conn)

@@ -11,7 +11,9 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"io"
 	"net/http"
+	"strings"
 )
 
 type BeforeCallOptionFuncParam struct {
@@ -50,16 +52,21 @@ func newServiceHandler(serviceClientConn *grpc.ClientConn, method *desc.MethodDe
 				requestMD.Append(headerKey, value)
 			}
 		}
-		var rpcRequestCtx = metadata.NewOutgoingContext(context.Background(), requestMD)
+		//requestMD.Append("Connection", "keep-alive")
+		//httpContext, cancelFunc := context.WithTimeout(c.Request.Context(), 1*time.Hour)
+		//defer cancelFunc()
+		var httpContext = context.Background()
+		var rpcRequestCtx = metadata.NewOutgoingContext(httpContext, requestMD)
 
 		// 解析HTTP请求体到动态消息
 		dynamicMsg := dynamic.NewMessage(method.GetInputType())
-		var fields = method.GetInputType().GetFields()
-		if len(fields) > 0 {
-			if err := json.NewDecoder(r.Body).Decode(dynamicMsg); err != nil {
-				http.Error(w, fmt.Sprintf("Failed to decode request body: %v", err), http.StatusBadRequest)
-				return
-			}
+		if r.Body == http.NoBody {
+			var emptyJsonReader = strings.NewReader("{}")
+			r.Body = io.NopCloser(emptyJsonReader)
+		}
+		if err := json.NewDecoder(r.Body).Decode(dynamicMsg); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to decode request body: %v", err), http.StatusBadRequest)
+			return
 		}
 
 		// 使用grpcdynamic包执行gRPC请求
