@@ -2,17 +2,25 @@ package pkg
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/protobuf/proto"
 	"github.com/jhump/protoreflect/desc"
+	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/grpcreflect"
 	"github.com/pkg/errors"
+	"github.com/swaggest/openapi-go"
+	"github.com/swaggest/openapi-go/openapi3"
 	"github.com/xdq-polaris/grpc-sidecar-lib/config"
 	"github.com/xdq-polaris/grpc-sidecar-lib/pkg/http_rule"
+	"github.com/xdq-polaris/grpc-sidecar-lib/static"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"net/http"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -59,6 +67,16 @@ func doResolveService(engine gin.IRouter,
 	serviceName string, svcDesc *desc.ServiceDescriptor, serviceClientConn *grpc.ClientConn,
 	allowedRequestHeaders []string) {
 	var methods = svcDesc.GetMethods()
+	var reflector = openapi3.NewReflector()
+	var specDesc = svcDesc.GetName()
+	reflector.Spec = &openapi3.Spec{
+		Openapi: "3.0.3",
+		Info: openapi3.Info{
+			Title:       svcDesc.GetName(),
+			Description: &specDesc,
+			Version:     "1.0.0",
+		},
+	}
 	for _, method := range methods {
 		var methodName = method.GetName()
 		fmt.Println(methodName)
@@ -81,8 +99,105 @@ func doResolveService(engine gin.IRouter,
 		}
 		httpMethod, httpPath := http_rule.HttpRulePatternToMethod(httpRule)
 		fmt.Println(fmt.Sprintf("%s->%s", serviceName, methodName), httpMethod, httpPath)
-
+		//swagger op
+		if err := addOpenAPIOperation(httpMethod, httpPath,
+			reflector,
+			method); err != nil {
+			panic(errors.Wrap(err, "add openapi operation"))
+		}
+		//service handler
 		engine.Handle(httpMethod, httpPath,
 			newServiceHandler(serviceClientConn, method, allowedRequestHeaders))
 	}
+	apiDocData, err := reflector.Spec.MarshalYAML()
+	if err != nil {
+		panic(errors.Wrap(err, "marshal openapi spec to yaml"))
+	}
+	//var apiDocStr = string(apiDocData)
+	engine.GET(fmt.Sprintf("/openapi/%s.yaml", svcDesc.GetName()), func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/yaml", apiDocData)
+	})
+	engine.GET(fmt.Sprintf("/swagger-ui/%s.html", svcDesc.GetName()), func(c *gin.Context) {
+		var encodedApiDocData = base64.URLEncoding.EncodeToString(apiDocData)
+		var dataUrl = fmt.Sprintf("data:text/plain;base64,%s", encodedApiDocData)
+		htmlStr, err := static.GenerateFullHtml(dataUrl)
+		if err != nil {
+			var internalErr = errors.Wrap(err, "generate full html")
+			c.String(http.StatusInternalServerError, internalErr.Error())
+			return
+		}
+		c.Data(http.StatusOK, "text/html", []byte(htmlStr))
+	})
+}
+
+func addOpenAPIOperation(httpMethod string, httpPath string,
+	reflector *openapi3.Reflector,
+	method *desc.MethodDescriptor) error {
+	const contentType = "application/json"
+	opCtx, err := reflector.NewOperationContext(httpMethod, httpPath)
+	if err != nil {
+		return errors.Wrap(err, "new openapi operation")
+	}
+	reqTemplateType, err := protoMessageToGoStruct(method.GetInputType())
+	if err != nil {
+		return errors.Wrap(err, "convert grpc request msg")
+	}
+	var reqTemplate = reflect.New(reqTemplateType).Elem().Interface()
+	opCtx.AddReqStructure(reqTemplate,
+		openapi.WithContentType(contentType))
+	respTemplateType, err := protoMessageToGoStruct(method.GetOutputType())
+	if err != nil {
+		return errors.Wrap(err, "convert grpc response msg")
+	}
+	var respTemplate = reflect.New(respTemplateType).Elem().Interface()
+	opCtx.AddRespStructure(respTemplate,
+		openapi.WithContentType(contentType))
+	if err := reflector.AddOperation(opCtx); err != nil {
+		return errors.Wrap(err, "add operation to openapi reflector")
+	}
+	return nil
+}
+
+func protoMessageToGoStruct(messageDesc *desc.MessageDescriptor) (reflect.Type, error) {
+	var structFields = make([]reflect.StructField, 0)
+	var protoFields = messageDesc.GetFields()
+	var dynamicMsg = dynamic.NewMessage(messageDesc)
+	for _, protoField := range protoFields {
+		var protoFieldName = protoField.GetName()
+		var dynamicFieldValue = dynamicMsg.GetField(protoField)
+		var fieldProtoType = protoField.GetType()
+		var fieldReflectType = reflect.Type(nil)
+		switch fieldProtoType {
+		case descriptorpb.FieldDescriptorProto_TYPE_MESSAGE:
+			msgType, err := protoMessageToGoStruct(protoField.GetMessageType())
+			if err != nil {
+				return nil, errors.Wrapf(err, "convert message type for field:%s.%s",
+					messageDesc.GetName(), protoFieldName)
+			}
+			fieldReflectType = msgType
+			break
+
+		//case descriptorpb.FieldDescriptorProto_TYPE_ENUM:
+		//	fieldReflectType=reflect.TypeOf(int(0))
+		//	break
+		default:
+			fieldReflectType = reflect.TypeOf(dynamicFieldValue)
+		}
+		//处理repeated和optional这种label
+		var fieldProtoLabel = protoField.GetLabel()
+		switch fieldProtoLabel {
+		case descriptorpb.FieldDescriptorProto_LABEL_REPEATED:
+			fieldReflectType = reflect.SliceOf(fieldReflectType)
+		}
+		var jsonTagStr = fmt.Sprintf(`json:"%s"`, protoField.GetName())
+		var reflectFieldName = strings.ToUpper(string(protoFieldName[0])) + protoFieldName[1:]
+		var structField = reflect.StructField{
+			Name: reflectFieldName,
+			Type: fieldReflectType,
+			Tag:  reflect.StructTag(jsonTagStr),
+		}
+		structFields = append(structFields, structField)
+	}
+	var reflectMsgType = reflect.StructOf(structFields)
+	return reflectMsgType, nil
 }
