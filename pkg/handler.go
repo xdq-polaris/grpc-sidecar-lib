@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"io"
 	"net/http"
 	"strings"
@@ -73,7 +74,7 @@ func newServiceHandler(serviceClientConn *grpc.ClientConn, method *desc.MethodDe
 		stub := grpcdynamic.NewStub(serviceClientConn)
 		response, err := stub.InvokeRpc(rpcRequestCtx, method, dynamicMsg)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("gRPC call failed: %v", err), http.StatusInternalServerError)
+			handleInvokeError(c, err)
 			return
 		}
 
@@ -100,4 +101,19 @@ func newServiceHandler(serviceClientConn *grpc.ClientConn, method *desc.MethodDe
 			return
 		}
 	}
+}
+
+func handleInvokeError(c *gin.Context, err error) {
+	statusObj, ok := status.FromError(err)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code": "Unsorted",
+			"msg":  err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{
+		"code": statusObj.Code().String(),
+		"msg":  statusObj.Message(),
+	})
 }
