@@ -2,7 +2,6 @@ package pkg
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/protobuf/proto"
@@ -21,7 +20,9 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"net/http"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -115,12 +116,14 @@ func doResolveService(engine gin.IRouter,
 		panic(errors.Wrap(err, "marshal openapi spec to yaml"))
 	}
 	//var apiDocStr = string(apiDocData)
-	engine.GET(fmt.Sprintf("/openapi/%s.yaml", svcDesc.GetName()), func(c *gin.Context) {
+	var openapiHttpPath = fmt.Sprintf("/openapi/%s.yaml", svcDesc.GetName())
+	engine.GET(openapiHttpPath, func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/yaml", apiDocData)
 	})
-	engine.GET(fmt.Sprintf("/swagger-ui/%s.html", svcDesc.GetName()), func(c *gin.Context) {
-		var encodedApiDocData = base64.URLEncoding.EncodeToString(apiDocData)
-		var dataUrl = fmt.Sprintf("data:text/plain;base64,%s", encodedApiDocData)
+	var swaggerUIHttpPath = fmt.Sprintf("/swagger-ui/%s.html", svcDesc.GetName())
+	engine.GET(swaggerUIHttpPath, func(c *gin.Context) {
+		var encodedApiDocStr = url.PathEscape(string(apiDocData))
+		var dataUrl = fmt.Sprintf("data:text/plain,%s", encodedApiDocStr)
 		htmlStr, err := static.GenerateFullHtml(dataUrl)
 		if err != nil {
 			var internalErr = errors.Wrap(err, "generate full html")
@@ -223,4 +226,10 @@ func protoMessageToGoStruct(messageDesc *desc.MessageDescriptor) (reflect.Type, 
 	}
 	var reflectMsgType = reflect.StructOf(structFields)
 	return reflectMsgType, nil
+}
+
+func unicodeEncode(str string) string {
+	textQuoted := strconv.QuoteToASCII(str)
+	textUnquoted := textQuoted[1 : len(textQuoted)-1]
+	return textUnquoted
 }
