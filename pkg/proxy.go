@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/protobuf/proto"
+	openAPIV3Proto "github.com/google/gnostic/openapiv3"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/grpcreflect"
@@ -138,6 +139,16 @@ func addOpenAPIOperation(httpMethod string, httpPath string,
 	if err != nil {
 		return errors.Wrap(err, "new openapi operation")
 	}
+	//apply api document
+	var options = method.GetOptions()
+	operationExtObj, err := proto.GetExtension(options, openAPIV3Proto.E_Operation)
+	if err != nil {
+		var internalErr = errors.Wrap(err, "get operation proto extension")
+		fmt.Println("[openapi] skip generate operation:", method.GetFullyQualifiedName(), "err:", internalErr)
+	} else {
+		var operationExt = operationExtObj.(*openAPIV3Proto.Operation)
+		opCtx.SetDescription(operationExt.Description)
+	}
 	reqTemplateType, err := protoMessageToGoStruct(method.GetInputType())
 	if err != nil {
 		return errors.Wrap(err, "convert grpc request msg")
@@ -183,18 +194,30 @@ func protoMessageToGoStruct(messageDesc *desc.MessageDescriptor) (reflect.Type, 
 		default:
 			fieldReflectType = reflect.TypeOf(dynamicFieldValue)
 		}
+		var fieldTagStr = ""
+		//先检查有没有openapi option
+		var fieldOptions = protoField.GetOptions()
+		propertyExtObj, err := proto.GetExtension(fieldOptions, openAPIV3Proto.E_Property)
+		if err != nil {
+			var internalErr = errors.Wrap(err, "get schema proto extension")
+			fmt.Println("[openapi] skip generate schema:", protoField.GetFullyQualifiedName(), "err:", internalErr)
+		} else {
+			var schemaExt = propertyExtObj.(*openAPIV3Proto.Schema)
+			fieldTagStr = fmt.Sprintf(`%s title:"%s" description:"%s"`,
+				fieldTagStr, schemaExt.Title, schemaExt.Description)
+		}
 		//处理repeated和optional这种label
 		var fieldProtoLabel = protoField.GetLabel()
 		switch fieldProtoLabel {
 		case descriptorpb.FieldDescriptorProto_LABEL_REPEATED:
 			fieldReflectType = reflect.SliceOf(fieldReflectType)
 		}
-		var jsonTagStr = fmt.Sprintf(`json:"%s"`, protoField.GetName())
+		fieldTagStr = fmt.Sprintf(`%s json:"%s"`, fieldTagStr, protoField.GetName())
 		var reflectFieldName = strings.ToUpper(string(protoFieldName[0])) + protoFieldName[1:]
 		var structField = reflect.StructField{
 			Name: reflectFieldName,
 			Type: fieldReflectType,
-			Tag:  reflect.StructTag(jsonTagStr),
+			Tag:  reflect.StructTag(fieldTagStr),
 		}
 		structFields = append(structFields, structField)
 	}
