@@ -9,6 +9,8 @@ import (
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
 	"github.com/pkg/errors"
+	"github.com/xdq-polaris/grpc-sidecar-lib/utils"
+	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -112,8 +114,13 @@ func handleInvokeError(c *gin.Context, err error) {
 		})
 		return
 	}
+	type StatusMirror struct {
+		s *spb.Status
+	}
+	var statusMirror = utils.UnsafeCast[*status.Status, *StatusMirror](statusObj)
 	c.JSON(http.StatusInternalServerError, gin.H{
-		"code": statusObj.Code().String(),
-		"msg":  statusObj.Message(),
+		"code":    statusObj.Code().String(),
+		"msg":     statusObj.Message(),
+		"details": statusMirror.s.Details,
 	})
 }
