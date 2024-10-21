@@ -34,10 +34,13 @@ func ApplyHttpEngineFromConfig(engine gin.IRouter, sidecarConfig *config.Sidecar
 		PermitWithoutStream: true,             // send pings even without active streams
 	}
 	// 连接到gRPC服务
+	var defaultCallOptions = []grpc.CallOption{
+		grpc.MaxCallRecvMsgSize(1024 * 1024 * 1024),
+	}
 	conn, err := grpc.Dial(sidecarConfig.BackendAddress,
 		grpc.WithInsecure(),
 		grpc.WithKeepaliveParams(kacp),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1024*1024*1024)),
+		grpc.WithDefaultCallOptions(defaultCallOptions...),
 		grpc.WithBlock())
 	if err != nil {
 		panic(errors.Wrap(err, "dial grpc"))
