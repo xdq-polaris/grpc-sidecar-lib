@@ -37,6 +37,7 @@ func ApplyHttpEngineFromConfig(engine gin.IRouter, sidecarConfig *config.Sidecar
 	conn, err := grpc.Dial(sidecarConfig.BackendAddress,
 		grpc.WithInsecure(),
 		grpc.WithKeepaliveParams(kacp),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1024*1024*1024)),
 		grpc.WithBlock())
 	if err != nil {
 		panic(errors.Wrap(err, "dial grpc"))
