@@ -156,14 +156,17 @@ func addOpenAPIOperation(httpMethod string, httpPath string,
 		var operationExt = operationExtObj.(*openAPIV3Proto.Operation)
 		opCtx.SetDescription(operationExt.Description)
 	}
-	reqTemplateType, err := protoMessageToGoStruct(method.GetInputType())
+	var convertCtx = &protoMessageToGoStructContext{
+		generatedMap: make(map[string]reflect.Type),
+	}
+	reqTemplateType, err := protoMessageToGoStruct(method.GetInputType(), convertCtx)
 	if err != nil {
 		return errors.Wrap(err, "convert grpc request msg")
 	}
 	var reqTemplate = reflect.New(reqTemplateType).Elem().Interface()
 	opCtx.AddReqStructure(reqTemplate,
 		openapi.WithContentType(contentType))
-	respTemplateType, err := protoMessageToGoStruct(method.GetOutputType())
+	respTemplateType, err := protoMessageToGoStruct(method.GetOutputType(), convertCtx)
 	if err != nil {
 		return errors.Wrap(err, "convert grpc response msg")
 	}
@@ -176,10 +179,15 @@ func addOpenAPIOperation(httpMethod string, httpPath string,
 	return nil
 }
 
-func protoMessageToGoStruct(messageDesc *desc.MessageDescriptor) (reflect.Type, error) {
+type protoMessageToGoStructContext struct {
+	generatedMap map[string]reflect.Type
+}
+
+func protoMessageToGoStruct(messageDesc *desc.MessageDescriptor, convertCtx *protoMessageToGoStructContext) (reflect.Type, error) {
 	var structFields = make([]reflect.StructField, 0)
 	var protoFields = messageDesc.GetFields()
 	var dynamicMsg = dynamic.NewMessage(messageDesc)
+	//var selfCycleFieldNameList = make([]string, 0)
 	for _, protoField := range protoFields {
 		var protoFieldName = protoField.GetName()
 		var dynamicFieldValue = dynamicMsg.GetField(protoField)
@@ -187,7 +195,14 @@ func protoMessageToGoStruct(messageDesc *desc.MessageDescriptor) (reflect.Type, 
 		var fieldReflectType = reflect.Type(nil)
 		switch fieldProtoType {
 		case descriptorpb.FieldDescriptorProto_TYPE_MESSAGE:
-			msgType, err := protoMessageToGoStruct(protoField.GetMessageType())
+			var fieldProtoMsgType = protoField.GetMessageType()
+			if fieldProtoMsgType.GetFullyQualifiedName() == messageDesc.GetFullyQualifiedName() {
+				fmt.Println("self cycle detected:", fieldProtoMsgType.GetFullyQualifiedName())
+				//selfCycleFieldNameList = append(selfCycleFieldNameList, protoFieldName)
+				fieldReflectType = reflect.TypeOf("self cycle field")
+				break
+			}
+			msgType, err := protoMessageToGoStruct(fieldProtoMsgType, convertCtx)
 			if err != nil {
 				return nil, errors.Wrapf(err, "convert message type for field:%s.%s",
 					messageDesc.GetName(), protoFieldName)
